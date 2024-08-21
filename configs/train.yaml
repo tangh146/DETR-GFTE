@@ -1,0 +1,11 @@
+training:
+  train_data_path: C:\Users\remote desktop\Downloads\unitable-main\dataset\mini_pubtabnet\train
+  train_labels_path: C:\Users\remote desktop\Downloads\DETR-GFTE\misc\testval.jsonl
+  val_data_path: C:\Users\remote desktop\Downloads\unitable-main\dataset\mini_pubtabnet\train
+  val_labels_path: C:\Users\remote desktop\Downloads\DETR-GFTE\misc\testval.jsonl
+  batches_before_val: 100
+  checkpoint_save_dir: 'C:\Users\remote desktop\Downloads\visiontransformer\checkpoints'
+  pretrained_model:
+  lr: 0.001
+  batch_size: 4
+  num_epochs: 3

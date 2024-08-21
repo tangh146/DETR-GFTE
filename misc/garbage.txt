@@ -1,0 +1,27 @@
+    # Resize and pad the image
+    original_width, original_height = image.size
+
+    if original_width > target_size or original_height > target_size:
+        ratio = min(target_size / original_width, target_size / original_height)
+    elif original_width < target_size and original_height < target_size:
+        ratio = min(target_size / original_width, target_size / original_height)
+    else:
+        ratio = 1.0
+
+    new_width, new_height = int(original_width * ratio), int(original_height * ratio)
+    resized_image = image.resize((new_width, new_height), Image.LANCZOS)
+
+    # Pad the image to the target size
+    delta_w = target_size - new_width
+    delta_h = target_size - new_height
+    padding = (delta_w // 2, delta_h // 2, delta_w - (delta_w // 2), delta_h - (delta_h // 2))
+    padded_image = ImageOps.expand(resized_image, padding, fill='black')
+    
+    padded_bboxes = []
+    for bbox in bboxes:
+        xmin, ymin, xmax, ymax = bbox
+        xmin = int(xmin * ratio) + padding[0]
+        ymin = int(ymin * ratio) + padding[1]
+        xmax = int(xmax * ratio) + padding[0]
+        ymax = int(ymax * ratio) + padding[1]
+        padded_bboxes.append((xmin, ymin, xmax, ymax))
