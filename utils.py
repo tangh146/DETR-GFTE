@@ -112,3 +112,54 @@ def state_dict_cleaner(state_dict):
         else:
             new_state_dict[key] = state_dict[key]
     return new_state_dict
+
+def pad_2d(original_list, pad_to=50, padding_token=-1):
+    # Get the dimensions of the original list
+    rows = len(original_list)
+    cols = len(original_list[0]) if rows > 0 else 0
+
+    # Create a new 50x50 list filled with -1
+    padded_list = [[padding_token for _ in range(pad_to)] for _ in range(pad_to)]
+
+    # Copy the original list into the padded list
+    for i in range(min(rows, pad_to)):
+        for j in range(min(cols, pad_to)):
+            padded_list[i][j] = original_list[i][j]
+
+    return padded_list
+
+def depad_2d(padded_tensor, padding_token=-1):
+    depadded_list = []
+    for sample in padded_tensor:
+        sample_list = []
+        for row in sample:
+            # Convert to list and remove padding
+            row_list = [val.item() for val in row if val != padding_token]
+            if row_list:  # Only add non-empty rows
+                sample_list.append(row_list)
+        if sample_list:  # Only add non-empty samples
+            depadded_list.append(sample_list)
+    return depadded_list
+
+def pad(original_list, pad_to=100, padding_token=[-1, -1, -1, -1]):
+    # Create a new list with the target length
+    padded_list = original_list.copy()
+    
+    # Pad the list to the target length
+    while len(padded_list) < pad_to:
+        padded_list.append(padding_token)
+    
+    return padded_list
+
+def depad(padded_tensor, padding_token=[-1, -1, -1, -1]):
+    padding_token = torch.tensor(padding_token, dtype=padded_tensor.dtype)
+    
+    depadded_list = []
+    for sample in padded_tensor:
+        sample_list = []
+        for row in sample:
+            if not torch.equal(row, padding_token):
+                sample_list.append(row.tolist())
+        depadded_list.append(sample_list)
+    
+    return depadded_list

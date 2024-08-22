@@ -1,7 +1,9 @@
 import os
 import json
+import torch
 from torch.utils.data import Dataset, DataLoader
 from PIL import Image
+from utils import get_table_grid, pad, pad_2d
 
 class TrainDataset(Dataset):
 
@@ -48,9 +50,32 @@ class TrainDataset(Dataset):
         encoding = self.image_processor(images = image, annotations=label, return_tensors='pt')
 
         pixel_values = encoding["pixel_values"].squeeze()
-        target = encoding["labels"][0]
+        # get the dict of tensorized DETR labels
+        detr_label = encoding["labels"][0]
 
-        return pixel_values, target
+        # get the dict of tensorized GCN labels
+
+        # first, we get the table grid of the html
+        thead_grid, tbody_grid = get_table_grid(label['html'])
+        table_grid = thead_grid + tbody_grid
+
+        # pad the table grid to a side len of 40 and padding token -1
+        # TODO sweep through the final dataset to find the max table grid dims
+        table_grid = pad_2d(table_grid, pad_to=30, padding_token=-1)
+
+        # pad the gt bboxes list to a len of 100
+        # TODO sweep through the final dataset to find the max bbox count
+        gt_bboxes = []
+        for annotation in label['annotations']:
+            gt_bboxes.append(annotation['bbox'])
+        gt_bboxes = pad(gt_bboxes, pad_to=100, padding_token=[-1,-1,-1,-1])        
+
+        gcn_label = {
+            'table_grid': torch.tensor(table_grid, dtype=torch.float32),
+            'gt_bboxes': torch.tensor(gt_bboxes, dtype=torch.float32)
+        }
+
+        return pixel_values, detr_label, gcn_label
 
 def collate_fn(batch, image_processor):
 # DETR authors employ various image sizes during training, making it not possible 
@@ -60,7 +85,6 @@ def collate_fn(batch, image_processor):
     pixel_values = [item[0] for item in batch]
     encoding = image_processor.pad(pixel_values, return_tensors="pt")
     labels = [item[1] for item in batch]
-    print(labels)
     return {
         'pixel_values': encoding['pixel_values'],
         'pixel_mask': encoding['pixel_mask'],

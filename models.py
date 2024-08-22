@@ -138,8 +138,6 @@ class Detr(pl.LightningModule):
         # parse through each bbox pair in bbox pairs and compare against the gt bboxes
         # and create a gt tensor of shape [batch size, num edges]
 
-        
-
         loss = detr_outputs.loss
         loss_dict = detr_outputs.loss_dict
 

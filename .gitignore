@@ -1,3 +1,4 @@
 datasets/
 checkpoints/
+configs/
 __pycache__/
