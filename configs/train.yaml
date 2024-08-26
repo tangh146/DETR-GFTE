@@ -6,6 +6,5 @@ training:
   batches_before_val: 100
   checkpoint_save_dir: 'C:\Users\tangy\Downloads\visiontransformer\checkpoints'
   pretrained_model:
-  lr: 0.001
   batch_size: 4
   num_epochs: 3

@@ -84,11 +84,13 @@ def collate_fn(batch, image_processor):
 # which indicates which pixels are real/which are padding
     pixel_values = [item[0] for item in batch]
     encoding = image_processor.pad(pixel_values, return_tensors="pt")
-    labels = [item[1] for item in batch]
+    detr_labels = [item[1] for item in batch]
+    gcn_labels = [item[2] for item in batch]
     return {
         'pixel_values': encoding['pixel_values'],
         'pixel_mask': encoding['pixel_mask'],
-        'labels': labels
+        'detr_labels': detr_labels,
+        'gcn_labels': gcn_labels
     }
 
 def create_dataloaders(train_data_path, train_label_path, val_data_path, val_label_path, batch_size, image_processor):
