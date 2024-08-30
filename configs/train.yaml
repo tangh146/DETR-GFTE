@@ -1,10 +1,7 @@
 training:
-  train_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\ptn_examples_val\data
-  train_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\ptn_examples_val\ptn_examples_val.jsonl
-  val_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\ptn_examples_val\data
-  val_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\ptn_examples_val\ptn_examples_val.jsonl
-  batches_before_val: 100
-  checkpoint_save_dir: 'C:\Users\tangy\Downloads\visiontransformer\checkpoints'
-  pretrained_model:
+  train_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_train
+  train_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_train.jsonl
+  val_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_val
+  val_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_val.jsonl
   batch_size: 4
   num_epochs: 3

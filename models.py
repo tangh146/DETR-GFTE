@@ -5,7 +5,7 @@ from torch_geometric.nn import GCNConv
 import torch.nn.functional as F
 import torch.nn as nn
 from data import create_dataloaders
-from utils import state_dict_cleaner, depad, depad_2d, get_iou
+from utils import state_dict_cleaner, depad, depad_2d, get_iou, convert_to_width_height
 
 class SimplifiedTbNet(nn.Module):
     def __init__(self, d_model, num_classes, num_nodes):
@@ -66,6 +66,7 @@ class SimplifiedTbNet(nn.Module):
         probs = F.log_softmax(xfin, dim=-1)  # Shape: [batch_size, num_edges, num_classes]
 
         # Process Bounding Boxes
+        # TODO where is the batch dimension of pred_bboxes??
         bbox_pairs = torch.cat((
             pred_bboxes[:, self.edge_index[0]],  # Start bounding boxes
             pred_bboxes[:, self.edge_index[1]]   # End bounding boxes
@@ -73,6 +74,7 @@ class SimplifiedTbNet(nn.Module):
 
         # bbox pairs shape = [batch size, num edges, bbox dim * 2]
         # probs shape = [batch size, num edges, num classes]
+
         return probs, bbox_pairs
 
 class Detr(pl.LightningModule):
@@ -84,8 +86,7 @@ class Detr(pl.LightningModule):
             config,
             lr = 1e-4,
             lr_backbone = 1e-5,
-            weight_decay = 1e-4
-            ):
+            weight_decay = 1e-4):
         
         super().__init__()
         self.model = DetrForObjectDetection.from_pretrained(
@@ -110,6 +111,7 @@ class Detr(pl.LightningModule):
             self.simplified_tbnet = SimplifiedTbNet(self.d_model, self.num_classes, self.num_nodes)
             self.gcn_criterion = nn.NLLLoss()
 
+            # define the class integers here
             self.CLASS_NO_RELATION, self.CLASS_HORIZONTAL, self.CLASS_VERTICAL, self.CLASS_SAME_CELL = 0, 1, 2, 3
 
         if train_mode:
@@ -118,20 +120,38 @@ class Detr(pl.LightningModule):
                 config['training']['train_labels_path'],
                 config['training']['val_data_path'],
                 config['training']['val_labels_path'],
-                batch_size=config['batch_size'],
-                image_processor=self.image_processor
+                batch_size=config['training']['batch_size'],
+                image_processor=self.image_processor,
+                with_gcn=self.with_gcn
             )
             self.model.train()
         else:
             self.model.eval()
 
-    def forward(self, pixel_values, pixel_mask):
+    # expecting a cv2.imread numpy array. image can be batched
+    def forward(self, image):
 
-        detr_outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask)
+        target_sizes = torch.tensor([image.shape[:2]]).to(self.device)
+
+        inputs = self.image_processor(images=image, return_tensors='pt').to(self.device)
+
+        detr_outputs = self.model(**inputs)
 
         if self.with_gcn:
-            probs, bbox_pairs = self.simplified_tbnet(detr_outputs.last_hidden_state, detr_outputs.pred_boxes)
-            return detr_outputs, probs, bbox_pairs
+
+            results = self.image_processor.post_process_object_detection(
+                outputs=detr_outputs,
+                threshold=0,
+                target_sizes=target_sizes
+            )
+
+            # to convert corner to coco bboxes. full explanation in utils.py
+            pred_bboxes = torch.stack([convert_to_width_height(result['boxes']) for result in results])
+
+            probs, bbox_pairs = self.simplified_tbnet(detr_outputs.last_hidden_state, pred_bboxes)
+            # reminder: probs shape(batch_size, num_edges, num_classes),
+            # bbox_pairs shape(batch_size, num_edges, 8) where bbox format is COCO
+            return probs, bbox_pairs
         else:
             return detr_outputs
 
@@ -139,17 +159,36 @@ class Detr(pl.LightningModule):
         pixel_values = batch["pixel_values"]
         pixel_mask = batch["pixel_mask"]
         detr_labels = [{k: v.to(self.device) for k, v in t.items()} for t in batch["detr_labels"]]
-        gcn_labels = batch['gcn_labels']
 
         detr_outputs = self.model(pixel_values=pixel_values, pixel_mask=pixel_mask, labels=detr_labels)
-
+        
         detr_loss = detr_outputs.loss
         loss_dict = detr_outputs.loss_dict
 
         if self.with_gcn:
-            probs, bbox_pairs = self.simplified_tbnet(detr_outputs.last_hidden_state, detr_outputs.pred_boxes)
 
-            gt = self.process_target(bbox_pairs, gcn_labels['table_grid'], gcn_labels['gt_bboxes'])
+            gcn_labels = batch['gcn_labels']
+            
+            # detr_outputs.pred_boxes is normalized coords of format (centerx, centery, width, height)
+            # we will use image processor to convert it to unnormalized corner (x0, y0, x1, y1)
+
+            # prompt: detr_labels comes as a list of batch_size number of dicts. each dict has a key "orig_size", whose value is a tensor of shape (a, b). i need to collect all the orig_size values in detr_labels into a tensor of size (batch_size, a, b)
+            batched_orig_sizes = torch.stack([label['orig_size'] for label in detr_labels])
+            
+            results = self.image_processor.post_process_object_detection(
+                outputs=detr_outputs,
+                threshold=0,
+                target_sizes=batched_orig_sizes
+            )
+
+            # to convert corner to coco bboxes. full explanation in utils.py
+            pred_bboxes = torch.stack([convert_to_width_height(result['boxes']) for result in results])
+
+            probs, bbox_pairs = self.simplified_tbnet(detr_outputs.last_hidden_state, pred_bboxes)
+
+            # convert gcn_labels from list(dict(shape(a,b))) to dict(shape(batch_size, a, b))
+            batched_gcn_labels = {key: torch.stack([d[key] for d in gcn_labels]).to('cpu') for key in gcn_labels[0].keys()}
+            gt = self.process_target(bbox_pairs, batched_gcn_labels['table_grid'], batched_gcn_labels['gt_bboxes'])
             gt = gt.to(self.device)
 
             # expect (batch_size, num_classes, *, *, ...)
@@ -159,10 +198,18 @@ class Detr(pl.LightningModule):
             loss_dict['gcn_loss'] = gcn_loss
             loss = detr_loss + gcn_loss
 
-        return loss, loss_dict
+            return loss, loss_dict
+        
+        else: return detr_loss, loss_dict
 
     def training_step(self, batch, batch_idx):
         loss, loss_dict = self.common_step(batch, batch_idx)
+
+        # Debugging print statement
+        print(f"Batch {batch_idx} - Training Loss: {loss.item()}")
+        for k, v in loss_dict.items():
+            print(f"Batch {batch_idx} - {k}: {v.item()}")
+
         # logs metrics for each training_step, and the average across the epoch
         self.log("training_loss", loss)
         for k,v in loss_dict.items():
@@ -207,6 +254,8 @@ class Detr(pl.LightningModule):
 
         # now we can compare bbox pairs against gt bboxes based on some criterion
         # TODO this is super naive, consider using batched tensors with torchvision's box_iou tool
+        # for now, since we're doing batches of 4 (max for 16gb card), this cpu method is cheap
+        # compared to the amt of time the batch stays in the gpu
         bbox_pairs = bbox_pairs.tolist()
         for batch_index, batch in enumerate(bbox_pairs):
             for edge in batch:
@@ -254,6 +303,11 @@ class Detr(pl.LightningModule):
                                     break
                         if gt_class: break
                     if gt_class: break
+                
+                # the 2 bboxes are gt-matched, of different gt index and no vert or horiz relation.
+                # thus we conclude there must be no relation
+                if not gt_class: gt_class = self.CLASS_NO_RELATION
+
                 gt[batch_index].append(gt_class)
 
         return torch.tensor(gt, dtype=torch.long)

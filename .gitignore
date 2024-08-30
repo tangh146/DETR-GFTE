@@ -1,4 +1,5 @@
 datasets/
 checkpoints/
 configs/
+wandb/
 __pycache__/

@@ -2,6 +2,7 @@ import yaml
 import torch
 from bs4 import BeautifulSoup as bs
 from typing import List
+import cv2
 
 def load_config(config_file):
     """
@@ -214,3 +215,54 @@ def get_iou(a, b, epsilon=1e-5):
     # RATIO OF AREA OF OVERLAP OVER COMBINED AREA
     iou = area_overlap / (area_combined+epsilon)
     return iou
+
+# prompt: "results" is a list of "batch_size" number of dicts. each dict has a key "boxes", whose value is a tensor of shape (100,4). so as you can probably tell, the value contains 100 bboxes of 4 coordinates each. the bboxes are of the format (top_left_x, top_left_y, bottom_right_x, bottom_right_y). i need to collect all of the "boxes" values into a tensor of shape (batch_size, 100, 4), and i must convert them to the format (top_left_x, top_left_y, width, height)
+# Function to convert (x0, y0, x1, y1) to (x0, y0, width, height)
+def convert_to_width_height(boxes):
+    # Convert from (top_left_x, top_left_y, bottom_right_x, bottom_right_y) 
+    # to (top_left_x, top_left_y, width, height)
+    x0, y0, x1, y1 = boxes.unbind(-1)
+    width = x1 - x0
+    height = y1 - y0
+    return torch.stack((x0, y0, width, height), dim=-1)
+
+# prompt and unit test in gencode_testbed
+def draw_bboxes_and_edges(image, prob_tensor, edge_tensor, bbox_thickness=2, line_thickness=2):
+    # Define the color mapping for the classes
+    colors = {
+        1: (0, 0, 255),   # Red
+        2: (255, 0, 0),   # Blue
+        3: (0, 255, 0)    # Green
+    }
+
+    batch_size, num_edges, num_classes = prob_tensor.shape
+
+    # Ensure prob_tensor is in log-softmax format and get the predicted class per edge
+    predicted_classes = torch.argmax(prob_tensor, dim=-1)
+
+    for i in range(batch_size):
+        for j in range(num_edges):
+            # Extract the bounding boxes for the current edge
+            bbox1 = edge_tensor[i, j, :4].cpu().numpy().astype(int)
+            bbox2 = edge_tensor[i, j, 4:].cpu().numpy().astype(int)
+
+            # Draw the bounding boxes on the image
+            x1, y1, w1, h1 = bbox1
+            x2, y2, w2, h2 = bbox2
+
+            cv2.rectangle(image, (x1, y1), (x1 + w1, y1 + h1), (0, 255, 255), bbox_thickness)
+            cv2.rectangle(image, (x2, y2), (x2 + w2, y2 + h2), (0, 255, 255), bbox_thickness)
+
+            # Get the predicted class and corresponding color
+            predicted_class = predicted_classes[i, j].item()
+            if predicted_class == 0:
+                continue  # Skip drawing for class 0
+
+            color = colors[predicted_class]
+
+            # Draw the edge as a line connecting the centers of the two bounding boxes
+            center1 = (x1 + w1 // 2, y1 + h1 // 2)
+            center2 = (x2 + w2 // 2, y2 + h2 // 2)
+            cv2.line(image, center1, center2, color, line_thickness)
+
+    return image
