@@ -3,6 +3,7 @@ import torch
 from bs4 import BeautifulSoup as bs
 from typing import List
 import cv2
+import math
 
 def load_config(config_file):
     """
@@ -130,17 +131,13 @@ def pad_2d(original_list, pad_to=50, padding_token=-1):
     return padded_list
 
 def depad_2d(padded_tensor, padding_token=-1):
-    depadded_list = []
-    for sample in padded_tensor:
-        sample_list = []
-        for row in sample:
-            # Convert to list and remove padding
-            row_list = [val.item() for val in row if val != padding_token]
-            if row_list:  # Only add non-empty rows
-                sample_list.append(row_list)
-        if sample_list:  # Only add non-empty samples
-            depadded_list.append(sample_list)
-    return depadded_list
+    sample_list = []
+    for row in padded_tensor:
+        # Convert to list and remove padding
+        row_list = [val.item() for val in row if val != padding_token]
+        if row_list:  # Only add non-empty rows
+            sample_list.append(row_list)
+    return sample_list
 
 def pad(original_list, pad_to=100, padding_token=[-1, -1, -1, -1]):
     # Create a new list with the target length
@@ -155,15 +152,12 @@ def pad(original_list, pad_to=100, padding_token=[-1, -1, -1, -1]):
 def depad(padded_tensor, padding_token=[-1, -1, -1, -1]):
     padding_token = torch.tensor(padding_token, dtype=padded_tensor.dtype)
     
-    depadded_list = []
-    for sample in padded_tensor:
-        sample_list = []
-        for row in sample:
-            if not torch.equal(row, padding_token):
-                sample_list.append(row.tolist())
-        depadded_list.append(sample_list)
+    sample_list = []
+    for row in padded_tensor:
+        if not torch.equal(row, padding_token):
+            sample_list.append(row.tolist())
     
-    return depadded_list
+    return sample_list
 
 # coco format to normal format
 def convert_bbox_format(bbox):
@@ -193,6 +187,11 @@ def get_iou(a, b, epsilon=1e-5):
     """
     a = convert_bbox_format(a)
     b = convert_bbox_format(b)
+
+    # Check if bbox `a` is completely within bbox `b`
+    if (a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]):
+        return 1.0
+    
     # COORDINATES OF THE INTERSECTION BOX
     x1 = max(a[0], b[0])
     y1 = max(a[1], b[1])
@@ -216,23 +215,22 @@ def get_iou(a, b, epsilon=1e-5):
     iou = area_overlap / (area_combined+epsilon)
     return iou
 
-# prompt: "results" is a list of "batch_size" number of dicts. each dict has a key "boxes", whose value is a tensor of shape (100,4). so as you can probably tell, the value contains 100 bboxes of 4 coordinates each. the bboxes are of the format (top_left_x, top_left_y, bottom_right_x, bottom_right_y). i need to collect all of the "boxes" values into a tensor of shape (batch_size, 100, 4), and i must convert them to the format (top_left_x, top_left_y, width, height)
-# Function to convert (x0, y0, x1, y1) to (x0, y0, width, height)
-def convert_to_width_height(boxes):
-    # Convert from (top_left_x, top_left_y, bottom_right_x, bottom_right_y) 
-    # to (top_left_x, top_left_y, width, height)
-    x0, y0, x1, y1 = boxes.unbind(-1)
-    width = x1 - x0
-    height = y1 - y0
-    return torch.stack((x0, y0, width, height), dim=-1)
+# convert xyxy to coco bbox format
+def decoco(bboxes):
+    converted_bboxes = []
+    for bbox in bboxes:
+        xmin, ymin, xmax, ymax = bbox
+        width = xmax - xmin
+        height = ymax - ymin
+        converted_bboxes.append([xmin, ymin, width, height])
+    return converted_bboxes
 
 # prompt and unit test in gencode_testbed
 def draw_bboxes_and_edges(image, prob_tensor, edge_tensor, bbox_thickness=2, line_thickness=2):
     # Define the color mapping for the classes
     colors = {
         1: (0, 0, 255),   # Red
-        2: (255, 0, 0),   # Blue
-        3: (0, 255, 0)    # Green
+        2: (255, 0, 0)   # Blue
     }
 
     batch_size, num_edges, num_classes = prob_tensor.shape
@@ -266,3 +264,152 @@ def draw_bboxes_and_edges(image, prob_tensor, edge_tensor, bbox_thickness=2, lin
             cv2.line(image, center1, center2, color, line_thickness)
 
     return image
+
+def intersect_1d(start1, end1, start2, end2):
+    return max(start1, start2) <= min(end1, end2)
+
+def get_psuedo_knn(bboxes, default_radius=30, candidate_radius = 50):
+    """
+    Construct a pseudo-KNN graph based on the bounding box overlap and centroids.
+    
+    Args:
+        bboxes (torch.Tensor): Tensor of shape (num_bboxes, 4) where each row represents
+                               [x_min, y_min, width, height] for a bounding box.
+        default_radius (int): Radius used to create pseudo connections when no neighbors are found.
+
+    Returns:
+        edge_index (torch.Tensor): Edge index tensor of shape (2, num_edges) representing the connections.
+    """
+    # Initialize the edge index list to store connections
+    edge_index = torch.empty((2, 0), dtype=torch.long)
+
+    # Compute the centroids of all bounding boxes
+    centers = bboxes[:, :2] + (bboxes[:, 2:] / 2)  # Shape: (num_bboxes, 2)
+    num_bboxes = bboxes.size(0)
+
+    # Iterate over each target bbox to construct its neighborhood
+    for i, target_bbox in enumerate(bboxes):
+        horz_candidates, vert_candidates = [], []
+
+        for j, knn_bbox in enumerate(bboxes):
+            if intersect_1d(target_bbox[0] - candidate_radius, target_bbox[0] + target_bbox[2] + candidate_radius, 
+                            knn_bbox[0], knn_bbox[0] + knn_bbox[2]):
+                vert_candidates.append(knn_bbox)
+            elif intersect_1d(target_bbox[1] - candidate_radius, target_bbox[1] + target_bbox[3] + candidate_radius, 
+                              knn_bbox[1], knn_bbox[1] + knn_bbox[3]):
+                horz_candidates.append(knn_bbox)
+        
+        # Initialize nearest neighbors
+        up, down, left, right = None, None, None, None
+        
+        # Horizontal candidates (left and right)
+        for horz_candidate in horz_candidates:
+            # left candidate
+            if horz_candidate[0] + horz_candidate[2] < target_bbox[0]:
+                if left is None or horz_candidate[0] + horz_candidate[2] > left[0] + left[2]:
+                    left = horz_candidate
+            # right candidate
+            if horz_candidate[0] > target_bbox[0] + target_bbox[2]:
+                if right is None or horz_candidate[0] < right[0]:
+                    right = horz_candidate
+        
+        # Vertical candidates (up and down)
+        for vert_candidate in vert_candidates:
+            # up candidate
+            if vert_candidate[1] + vert_candidate[3] < target_bbox[1]:
+                if up is None or vert_candidate[1] + vert_candidate[3] > up[1] + up[3]:
+                    up = vert_candidate
+            # down candidate
+            if vert_candidate[1] > target_bbox[1] + target_bbox[3]:
+                if down is None or vert_candidate[1] < down[1]:
+                    down = vert_candidate
+        
+        # Fallback to default radius if no neighbors found
+        if left is None: left = [target_bbox[0] - default_radius, 0, 0, 0]
+        if right is None: right = [target_bbox[0] + default_radius, 0, target_bbox[2], 0]
+        if up is None: up = [0, target_bbox[1] - default_radius, 0, 0]
+        if down is None: down = [0, target_bbox[1] + default_radius, 0, target_bbox[3]]
+
+        # Construct the local area of interest (bounding box)
+        xmin, xmax = left[0], right[0] + right[2]
+        ymin, ymax = up[1], down[1] + down[3]
+
+        # Now, find all bboxes whose centroids lie within the area of interest
+        for j, centroid in enumerate(centers):
+            if xmin <= centroid[0] <= xmax and ymin <= centroid[1] <= ymax:
+                # Create an edge between the target bbox and the neighboring bbox
+                edge_index = torch.cat([edge_index, torch.tensor([[i], [j]])], dim=1)
+
+    return prune_and_bidirectional(edge_index)
+
+# normalizes coco bboxes and returns feature vector
+def get_feature_vec(gt_bboxes, orig_size):
+    # Original image width and height
+    orig_w, orig_h = orig_size[0], orig_size[1]
+    
+    # Extract bbox information
+    x1 = gt_bboxes[:, 0] / orig_w  # Top-left x (normalized)
+    y1 = gt_bboxes[:, 1] / orig_h  # Top-left y (normalized)
+    x2 = (gt_bboxes[:, 0] + gt_bboxes[:, 2]) / orig_w  # Bottom-right x (normalized)
+    y2 = (gt_bboxes[:, 1] + gt_bboxes[:, 3]) / orig_h  # Bottom-right y (normalized)
+    
+    # Compute center points
+    cx = (x1 + x2) / 2  # Center x
+    cy = (y1 + y2) / 2  # Center y
+    
+    # Compute width and height (normalized)
+    w = (x2 - x1)  # Normalized width
+    h = (y2 - y1)  # Normalized height
+    
+    # Stack all features into a feature vector of size 8
+    feature_vector = torch.stack([x1, x2, y1, y2, cx, cy, w, h], dim=1)
+    
+    return feature_vector
+
+def prune_and_bidirectional(edge_index):
+    # Step 1: Prune self-connections
+    mask = edge_index[0] != edge_index[1]  # Remove self-connections
+    edge_index = edge_index[:, mask]        # Apply mask to prune self-loops
+
+    # Step 2: Convert unidirectional edges to bidirectional
+    # Convert to a set of tuples for fast lookup
+    edge_set = set(map(tuple, edge_index.t().tolist()))
+
+    # List to hold new bidirectional edges
+    new_edges = []
+
+    # Check for unidirectional edges and add reverse if not present
+    for i, j in edge_set:
+        if (j, i) not in edge_set:  # If reverse edge does not exist
+            new_edges.append([j, i])
+
+    # Add the new bidirectional edges
+    if new_edges:
+        new_edges_tensor = torch.tensor(new_edges, device=edge_index.device).t()
+        edge_index = torch.cat([edge_index, new_edges_tensor], dim=1)
+
+    return edge_index
+
+def positionalencoding2d(d_model, height, width):
+    """
+    :param d_model: dimension of the model
+    :param height: height of the positions
+    :param width: width of the positions
+    :return: d_model*height*width position matrix
+    """
+    if d_model % 4 != 0:
+        raise ValueError("Cannot use sin/cos positional encoding with "
+                         "odd dimension (got dim={:d})".format(d_model))
+    pe = torch.zeros(d_model, height, width)
+    # Each dimension use half of d_model
+    d_model = int(d_model / 2)
+    div_term = torch.exp(torch.arange(0., d_model, 2) *
+                         -(math.log(10000.0) / d_model))
+    pos_w = torch.arange(0., width).unsqueeze(1)
+    pos_h = torch.arange(0., height).unsqueeze(1)
+    pe[0:d_model:2, :, :] = torch.sin(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+    pe[1:d_model:2, :, :] = torch.cos(pos_w * div_term).transpose(0, 1).unsqueeze(1).repeat(1, height, 1)
+    pe[d_model::2, :, :] = torch.sin(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+    pe[d_model + 1::2, :, :] = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
+
+    return pe

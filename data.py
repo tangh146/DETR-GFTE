@@ -47,11 +47,10 @@ class TrainDataset(Dataset):
         img_path = os.path.join(self.data_path, filename)
         image = Image.open(img_path).convert("RGB")
 
-        encoding = self.image_processor(images = image, annotations=label, return_tensors='pt')
-
-        pixel_values = encoding["pixel_values"].squeeze()
-        # get the dict of tensorized DETR labels
-        detr_label = encoding["labels"][0]
+        encoder_annotations = []
+        for annotation in label['annotations']:
+            if annotation['bbox'] != [0,0,0.01,0.01]:
+                encoder_annotations.append(annotation)
 
         # get the dict of tensorized GCN labels
         if self.with_gcn:
@@ -62,19 +61,30 @@ class TrainDataset(Dataset):
             # pad the table grid to a side len of 40 and padding token -1
             table_grid = pad_2d(table_grid, pad_to=89, padding_token=-1)
 
-            # pad the gt bboxes list to a len of 100
-            gt_bboxes = []
+            # a very janky way to separate encoder from gcn annotations.
+            #  gcn requires empty bbox indicators while encoder doesnt
+            gt_bboxes= []
             for annotation in label['annotations']:
                 gt_bboxes.append(annotation['bbox'])
-            gt_bboxes = pad(gt_bboxes, pad_to=2061, padding_token=[-1,-1,-1,-1])        
+
+            gt_bboxes = pad(gt_bboxes, pad_to=2061, padding_token=[-1,-1,-1,-1])
 
             gcn_label = {
                 'table_grid': torch.tensor(table_grid, dtype=torch.float32),
                 'gt_bboxes': torch.tensor(gt_bboxes, dtype=torch.float32)
             }
+        
+        label['annotations'] = encoder_annotations
+        
+        encoding = self.image_processor(images = image, annotations=label, return_tensors='pt')
 
+        pixel_values = encoding["pixel_values"].squeeze()
+        # get the dict of tensorized DETR labels
+        detr_label = encoding["labels"][0]
+
+        if self.with_gcn:
             return pixel_values, detr_label, gcn_label
-        return pixel_values, detr_label
+        else: return pixel_values, detr_label
 
 def collate_fn(batch, image_processor, with_gcn):
 # DETR authors employ various image sizes during training, making it not possible 
