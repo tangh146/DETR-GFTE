@@ -413,3 +413,32 @@ def positionalencoding2d(d_model, height, width):
     pe[d_model + 1::2, :, :] = torch.cos(pos_h * div_term).transpose(0, 1).unsqueeze(2).repeat(1, 1, width)
 
     return pe
+
+def process_target(bbox_index_pairs, table_grid):
+
+    CLASS_NONE, CLASS_HORZ, CLASS_VERT = 0, 1, 2
+
+    horz_map, vert_map = {}, {}
+
+    for row_idx, row in enumerate(table_grid):
+        for col_idx, item in enumerate(row):
+            for tgt_idx in range(col_idx, len(row)):
+                if item != row[tgt_idx]:
+                    horz_map[(int(item), int(row[tgt_idx]))] = None
+            for tgt_idx in range(row_idx, len(table_grid)):
+                if item != table_grid[tgt_idx][col_idx]:
+                    vert_map[(int(item), int(table_grid[tgt_idx][col_idx]))] = None
+
+    gt_classes = []
+    for pair in bbox_index_pairs:
+        pair = tuple(map(int, pair.tolist()))
+        reverse_pair = (pair[1], pair[0])
+        # this commented code doesn't work!!!
+        if pair in horz_map or reverse_pair in horz_map:
+            gt_classes.append(CLASS_HORZ)
+        elif pair in vert_map or reverse_pair in vert_map:
+            gt_classes.append(CLASS_VERT)
+        else:
+            gt_classes.append(CLASS_NONE)
+    
+    return torch.tensor(gt_classes, dtype=torch.long)
