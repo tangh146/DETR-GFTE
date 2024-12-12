@@ -1,8 +1,0 @@
-training:
-  train_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_train
-  train_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_train.jsonl
-  val_data_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_val
-  val_labels_path: C:\Users\tangy\Downloads\DETR-GFTE\datasets\unified_val.jsonl
-  num_detr_classes: 1
-  batch_size: 4
-  num_epochs: 3

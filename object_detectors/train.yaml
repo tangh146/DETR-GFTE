@@ -1,0 +1,8 @@
+training:
+  train_data_path: 'path to pubtabnet train image directory'
+  train_labels_path: 'path to output of ptn2coco_monoclass/multiclass with split = train'
+  val_data_path: 'path to pubtabnet val image directory'
+  val_labels_path: 'path to output of ptn2coco_monoclass/multiclass with split = train'
+  num_detr_classes: 64
+  batch_size: 4
+  num_epochs: 3

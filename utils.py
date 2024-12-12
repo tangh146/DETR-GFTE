@@ -4,6 +4,8 @@ from bs4 import BeautifulSoup as bs
 from typing import List
 import cv2
 import math
+from scipy.spatial import distance_matrix
+import numpy as np
 
 def load_config(config_file):
     """
@@ -160,15 +162,23 @@ def depad(padded_tensor, padding_token=[-1, -1, -1, -1]):
     return sample_list
 
 # coco format to normal format
-def convert_bbox_format(bbox):
+def coco2xyxy(bbox):
     xmin, ymin, width, height = bbox
     xmax = xmin + width
     ymax = ymin + height
     return [xmin, ymin, xmax, ymax]
 
+
+# convert xyxy to coco bbox format
+def xyxy2coco(bbox):
+    xmin, ymin, xmax, ymax = bbox
+    width = xmax - xmin
+    height = ymax - ymin
+    return [xmin, ymin, width, height]
+
 # source: http://ronny.rest/tutorials/module/localization_001/iou/
-# in the ideal scenario, you should calculate iou scores as batched tensors
-# using the torchvision box_iou method to relieve cpu 
+# in the ideal scenario, we should calculate iou scores as batched tensors
+# using the torchvision box_iou method to relieve cpu. @linus help look into this plz
 def get_iou(a, b, epsilon=1e-5):
     """ Given two boxes `a` and `b` defined as a list of four numbers:
             [x1,y1,x2,y2]
@@ -185,8 +195,6 @@ def get_iou(a, b, epsilon=1e-5):
     Returns:
         (float) The Intersect of Union score.
     """
-    a = convert_bbox_format(a)
-    b = convert_bbox_format(b)
 
     # Check if bbox `a` is completely within bbox `b`
     if (a[0] >= b[0] and a[1] >= b[1] and a[2] <= b[2] and a[3] <= b[3]):
@@ -214,16 +222,6 @@ def get_iou(a, b, epsilon=1e-5):
     # RATIO OF AREA OF OVERLAP OVER COMBINED AREA
     iou = area_overlap / (area_combined+epsilon)
     return iou
-
-# convert xyxy to coco bbox format
-def decoco(bboxes):
-    converted_bboxes = []
-    for bbox in bboxes:
-        xmin, ymin, xmax, ymax = bbox
-        width = xmax - xmin
-        height = ymax - ymin
-        converted_bboxes.append([xmin, ymin, width, height])
-    return converted_bboxes
 
 # prompt and unit test in gencode_testbed
 def draw_bboxes_and_edges(image, prob_tensor, edge_tensor, bbox_thickness=2, line_thickness=2):
@@ -442,3 +440,57 @@ def process_target(bbox_index_pairs, table_grid):
             gt_classes.append(CLASS_NONE)
     
     return torch.tensor(gt_classes, dtype=torch.long)
+
+def detr2xyxy(bbox_normalized, image_width, image_height):
+    """
+    Converts a normalized DETR output bounding box to absolute pixel values in xyxy format.
+    
+    Args:
+        bbox_normalized (list or array): Normalized bounding box in [center_x, center_y, width, height].
+        image_width (int): Original width of the image.
+        image_height (int): Original height of the image.
+
+    Returns:
+        list: Bounding box in xyxy format [x_min, y_min, x_max, y_max].
+    """
+    cx, cy, w, h = bbox_normalized
+    x_min = (cx - w / 2) * image_width
+    y_min = (cy - h / 2) * image_height
+    x_max = (cx + w / 2) * image_width
+    y_max = (cy + h / 2) * image_height
+    return [x_min, y_min, x_max, y_max]
+
+def construct_basic_knn_graph(gt_bboxes, k=5):
+    """
+    Construct a basic KNN graph using bounding box centers.
+
+    Args:
+        gt_bboxes (torch.Tensor): Tensor of shape (num_bboxes, 4) with bounding boxes [xmin, ymin, width, height].
+        k (int): Number of nearest neighbors.
+
+    Returns:
+        edge_index (torch.Tensor): Edge index tensor of shape (2, num_edges).
+    """
+    # Ensure gt_bboxes is a torch.Tensor
+    gt_bboxes = gt_bboxes.clone().detach().float() if isinstance(gt_bboxes, torch.Tensor) else torch.tensor(gt_bboxes, dtype=torch.float32)
+
+    # Compute the center points for each bounding box
+    centers = gt_bboxes[:, :2] + (gt_bboxes[:, 2:] / 2)  # Shape: (num_bboxes, 2)
+
+    # Initialize the edge index list
+    edge_index = torch.empty((2, 0), dtype=torch.long)
+
+    # Compute pairwise distances between centers
+    distances = distance_matrix(centers.numpy(), centers.numpy())
+
+    # Iterate through each node to find its k-nearest neighbors
+    for i in range(len(centers)):
+        # Get indices of k nearest neighbors (excluding the node itself)
+        nearest_indices = np.argsort(distances[i])[1:k + 1]
+
+        # Add edges to the graph
+        for j in nearest_indices:
+            edge_index = torch.cat([edge_index, torch.tensor([[i], [j]])], dim=1)
+            edge_index = torch.cat([edge_index, torch.tensor([[j], [i]])], dim=1)  # Add reverse edge
+
+    return prune_and_bidirectional(edge_index)
