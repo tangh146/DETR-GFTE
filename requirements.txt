@@ -1,0 +1,13 @@
+numpy
+torch
+pytorch-lightning
+matplotlib
+Pillow
+torchvision
+tqdm
+transformers
+torch-geometric
+pyyaml
+beautifulsoup4
+opencv-python-headless
+scipy
