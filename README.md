@@ -4,10 +4,20 @@ Experimental graph-based table recognition models based on [DETR](https://arxiv.
 
 ## Usage
 
-STEP 1: Download and install `requirements.txt`.
+1.Set up environment 
+git clone  https://github.com/tangh146/DETR-GFTE.git
+cd DETR-GFTE
+python3 -m venv myenv
+source myenv/bin/activate
+pip install -r requirements.txt
 
-STEP 2: [Download the checkpoints folder](https://drive.google.com/drive/folders/1luUrVkRi4txh5Pt_TSnyh3Jg3x26oAXh?usp=sharing) and place it in this directory.
+2.Download checkpoints folder
+pip install gdown
+gdown --folder https://drive.google.com/drive/folders/1luUrVkRi4txh5Pt_TSnyh3Jg3x26oAXh
+Alternatively:
+[Download the checkpoints folder](https://drive.google.com/drive/folders/1luUrVkRi4txh5Pt_TSnyh3Jg3x26oAXh?usp=sharing) and place the folder in DETR-GFTE directory.
 
-STEP 3: You may now run the `inference.ipynb` notebooks.
+3.You may now run the `inference.ipynb` notebooks. 
 
-STEP 4: To run the `evaluation.ipynb` and `training.ipynb` notebooks, [download the PubTabNet dataset](https://developer.ibm.com/exchanges/data/all/pubtabnet/) and follow the instructions in the notebooks to prepare the `.jsonl` annotation files.
+
+4.To run the `evaluation.ipynb` and `training.ipynb` notebooks, [download the PubTabNet dataset](https://developer.ibm.com/exchanges/data/all/pubtabnet/) and follow the instructions in the notebooks to prepare the `.jsonl` annotation files.
