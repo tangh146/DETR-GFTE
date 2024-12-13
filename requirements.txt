@@ -11,3 +11,4 @@ pyyaml
 beautifulsoup4
 opencv-python-headless
 scipy
+timm
